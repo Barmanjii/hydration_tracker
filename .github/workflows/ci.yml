@@ -51,11 +51,13 @@ jobs:
           node-version: 22
           cache: npm
 
-      - uses: actions/setup-java@v4
+      # No cache: gradle here. It resolves its cache key from gradle files at
+      # checkout time, and android/ does not exist yet. The explicit cache
+      # below runs after prebuild instead.
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
 
       - name: Install dependencies
         run: npm ci
@@ -64,6 +66,18 @@ jobs:
       # project buildable on a runner that has never seen it.
       - name: Generate native project
         run: npx expo prebuild --platform android --no-install
+
+      # Keyed on the lockfile: the generated gradle files are a function of the
+      # installed Expo and React Native versions, so the lockfile is the honest
+      # cache key even though it is not a gradle file.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - name: Build debug APK
         working-directory: android
