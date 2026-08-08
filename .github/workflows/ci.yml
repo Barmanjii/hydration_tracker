@@ -39,8 +39,8 @@ jobs:
   android:
     name: android debug build
     runs-on: ubuntu-latest
-    # Longer than the ten minute target because a cold Gradle build genuinely
-    # takes it. The cache below is what keeps subsequent runs reasonable.
+    # Measured at 6m55s on a cold cache, so this is a generous ceiling rather
+    # than an expected duration. If a run ever approaches it, something is wrong.
     timeout-minutes: 25
 
     steps:
