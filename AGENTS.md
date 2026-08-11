@@ -62,9 +62,16 @@ difference is the environment, not the checks.
 
 ## How work moves
 
-**Never commit directly to `main`.** It is protected and the push will be
-rejected. Every change goes through a branch and a pull request, including small
-ones.
+**Never commit directly to `main`.** It is protected with `enforce_admins` on, so
+the push is rejected for everyone including the repository owner. Every change
+goes through a branch and a pull request, including small ones.
+
+Enable the local guard once per clone, so this fails immediately rather than after
+the objects have uploaded:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 1. Branch as `prefix/short_description`, using conventional prefixes, underscores
    in the description, never hyphens. Example: `feat/streak_counter`.
@@ -83,6 +90,12 @@ gh stack submit --auto --open
 ```
 
 Do not manufacture a stack for a change that has no layers.
+
+**Merge with rebase, never squash.** The repository is configured to allow rebase
+merge only, so the wrong button is not available. Squash merging creates a commit
+on `main` that is not an ancestor of the branch it came from, which leaves every
+branch stacked above trying to reapply changes `main` already has. That turns a
+clean stack into a conflict on every merge. Merged branches delete themselves.
 
 ---
 
