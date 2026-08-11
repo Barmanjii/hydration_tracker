@@ -1,0 +1,23 @@
+#!/bin/sh
+# Reject any attempt to push directly to a protected branch.
+#
+# The remote enforces this as well, so this hook is not the real guarantee. It
+# exists because failing here is immediate and says why, rather than uploading
+# the objects first and then getting GH006 back from the server.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+
+protected="main"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+	case "$remote_ref" in
+	"refs/heads/$protected")
+		echo "pre-push: refusing to push directly to '$protected'." >&2
+		echo "          branch, then open a pull request." >&2
+		exit 1
+		;;
+	esac
+done
+
+exit 0
