@@ -34,45 +34,73 @@ const MIGRATIONS: readonly string[] = [
      ON drink_entry (logged_at);`,
 ];
 
-let database: SQLite.SQLiteDatabase | null = null;
+/**
+ * The in-flight or completed open.
+ *
+ * The promise is cached, not the resolved connection. Caching the connection
+ * would only dedupe callers arriving after migrations finished, so two calls in
+ * the same tick, which is exactly what a screen loading its data does, would
+ * each open a separate connection and each run the migration loop. One of those
+ * connections would then be unreachable and impossible to close.
+ */
+let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 
 /**
  * Open the database and bring its schema up to date.
  *
- * Safe to call more than once; the connection is reused. Uses SQLite's own
- * `user_version` as the migration marker rather than a table of our own, so
- * there is nothing extra to keep consistent.
+ * Safe to call concurrently and repeatedly; every caller awaits the same open.
+ * Uses SQLite's own `user_version` as the migration marker rather than a table
+ * of our own, so there is nothing extra to keep consistent.
  *
  * @returns The open, migrated database.
+ *
+ * @throws Error If the stored schema version is newer than this build knows.
  */
-export async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (database) return database;
+export function openDatabase(): Promise<SQLite.SQLiteDatabase> {
+  opening ??= (async () => {
+    const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
 
-  const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+    const result = await db.getFirstAsync<{ user_version: number }>(
+      "PRAGMA user_version"
+    );
+    let version = result?.user_version ?? 0;
 
-  const result = await db.getFirstAsync<{ user_version: number }>(
-    "PRAGMA user_version"
-  );
-  let version = result?.user_version ?? 0;
+    // A database from a newer build. Carrying on would mean running today's
+    // queries against a schema this code has never seen, which surfaces later
+    // as an opaque constraint failure mid tap. Fail here instead, where the
+    // message can say what actually happened.
+    if (version > MIGRATIONS.length) {
+      throw new Error(
+        `Database schema version ${version} is newer than this build supports ` +
+          `(${MIGRATIONS.length}). Reinstall the current version of the app.`
+      );
+    }
 
-  // Each migration and its version bump go in one transaction, so an
-  // interrupted upgrade cannot leave the schema applied but unrecorded.
-  while (version < MIGRATIONS.length) {
-    const sql = MIGRATIONS[version];
-    const next = version + 1;
+    // Each migration and its version bump go in one transaction, so an
+    // interrupted upgrade cannot leave the schema applied but unrecorded.
+    while (version < MIGRATIONS.length) {
+      const sql = MIGRATIONS[version];
+      const next = version + 1;
 
-    await db.withTransactionAsync(async () => {
-      await db.execAsync(sql);
-      // PRAGMA does not accept bound parameters. `next` is derived from array
-      // length, never from input, so the interpolation is not a injection path.
-      await db.execAsync(`PRAGMA user_version = ${next}`);
-    });
+      await db.withTransactionAsync(async () => {
+        await db.execAsync(sql);
+        // PRAGMA does not accept bound parameters. `next` comes from the array
+        // length, never from input, so this is not an injection path.
+        await db.execAsync(`PRAGMA user_version = ${next}`);
+      });
 
-    version = next;
-  }
+      version = next;
+    }
 
-  database = db;
-  return db;
+    return db;
+  })();
+
+  // A failed open must not be cached, or the app would keep replaying the same
+  // rejection for the rest of the process even if the cause was transient.
+  return opening.catch((error) => {
+    opening = null;
+    throw error;
+  });
 }
 
 /**
@@ -81,7 +109,7 @@ export async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
  * @param amountMl Volume in millilitres. Must be a positive integer.
  * @param loggedAt Epoch milliseconds. Defaults to now.
  *
- * @throws RangeError If the amount is not a positive integer.
+ * @throws RangeError If the amount or the timestamp is not a positive integer.
  */
 export async function addDrink(
   amountMl: number,
@@ -89,6 +117,13 @@ export async function addDrink(
 ): Promise<void> {
   if (!Number.isInteger(amountMl) || amountMl <= 0) {
     throw new RangeError(`amountMl must be a positive integer, got ${amountMl}`);
+  }
+  // Validated for the same reason as the amount. A NaN timestamp binds as NULL
+  // and trips the NOT NULL constraint, surfacing as an opaque SQL error on a
+  // tap; a merely wrong finite one stores fine and then reads back as a drink
+  // on some unrelated day.
+  if (!Number.isInteger(loggedAt) || loggedAt <= 0) {
+    throw new RangeError(`loggedAt must be a positive integer, got ${loggedAt}`);
   }
 
   const db = await openDatabase();
@@ -100,22 +135,39 @@ export async function addDrink(
 }
 
 /**
- * Remove the most recently logged drink.
+ * Remove the most recently logged drink, but only within a time bound.
  *
  * Undo matters more than usual here. Logging is a single tap by design, so
- * mis-taps are frequent, and without undo the only way to correct one would be
- * to log a negative amount, which the schema forbids.
+ * mis-taps are frequent, and the `amount_ml > 0` constraint rules out
+ * correcting one with a negative entry.
  *
- * @returns True if an entry was removed, false if there was nothing to remove.
+ * `notBeforeMs` is required rather than optional on purpose. An unbounded undo
+ * reaches backwards indefinitely, so tapping it on a morning with nothing
+ * logged yet would silently delete the last drink of a previous day, lowering
+ * that day's total and breaking a streak the user had already earned. Pass the
+ * start of the current logical day, from `startOfLogicalDayMs`.
+ *
+ * @param notBeforeMs Epoch milliseconds. Entries older than this are untouched.
+ * @returns True if an entry was removed, false if there was nothing in range.
  */
-export async function undoLastDrink(): Promise<boolean> {
+export async function undoLastDrink(notBeforeMs: number): Promise<boolean> {
+  if (!Number.isFinite(notBeforeMs)) {
+    throw new RangeError(`notBeforeMs must be finite, got ${notBeforeMs}`);
+  }
+
   const db = await openDatabase();
 
   // Ordered by id, not logged_at: id reflects insertion order, which is what
   // "last logged" means. A backdated entry should not become the undo target.
   const result = await db.runAsync(
     `DELETE FROM drink_entry
-      WHERE id = (SELECT id FROM drink_entry ORDER BY id DESC LIMIT 1)`
+      WHERE id = (
+        SELECT id FROM drink_entry
+         WHERE logged_at >= ?
+         ORDER BY id DESC
+         LIMIT 1
+      )`,
+    notBeforeMs
   );
 
   return result.changes > 0;
@@ -158,8 +210,12 @@ export async function deleteAllEntries(): Promise<void> {
  * For tests and for teardown. Does not delete data.
  */
 export async function closeDatabase(): Promise<void> {
-  if (!database) return;
+  if (!opening) return;
 
-  await database.closeAsync();
-  database = null;
+  const pending = opening;
+  // Cleared first, so a failed close cannot leave a dead handle cached.
+  opening = null;
+
+  const db = await pending;
+  await db.closeAsync();
 }

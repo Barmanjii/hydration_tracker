@@ -6,7 +6,7 @@
  * emulator, or a real SQLite instance.
  */
 
-import { dayKeyFor, DEFAULT_DAY_START_HOUR } from "./day";
+import { assertDayStartHour, dayKeyFor, DEFAULT_DAY_START_HOUR } from "./day";
 
 /** A single logged drink, as stored. */
 export interface DrinkEntry {
@@ -39,6 +39,9 @@ export function dayTotals(
   entries: readonly DrinkEntry[],
   dayStartHour: number = DEFAULT_DAY_START_HOUR
 ): DayTotal[] {
+  // Up front, not inside the loop: an empty list must reject a bad hour too.
+  assertDayStartHour(dayStartHour);
+
   const sums = new Map<string, number>();
 
   for (const entry of entries) {
@@ -64,6 +67,8 @@ export function totalForDay(
   dayKey: string,
   dayStartHour: number = DEFAULT_DAY_START_HOUR
 ): number {
+  assertDayStartHour(dayStartHour);
+
   let total = 0;
 
   for (const entry of entries) {
@@ -94,6 +99,7 @@ export function metDayKeys(
   if (!(goalMl > 0)) {
     throw new RangeError(`goalMl must be positive, got ${goalMl}`);
   }
+  assertDayStartHour(dayStartHour);
 
   const met = new Set<string>();
 

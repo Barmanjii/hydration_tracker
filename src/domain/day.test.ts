@@ -1,4 +1,9 @@
-import { DEFAULT_DAY_START_HOUR, dayKeyFor, previousDayKey } from "./day";
+import {
+  DEFAULT_DAY_START_HOUR,
+  dayKeyFor,
+  previousDayKey,
+  startOfLogicalDayMs,
+} from "./day";
 
 // Local time throughout. These dates are constructed with the local constructor
 // rather than parsed from ISO strings, because an ISO string with a Z would be
@@ -61,5 +66,36 @@ describe("previousDayKey", () => {
 
   it("handles a leap day", () => {
     expect(previousDayKey("2028-03-01")).toBe("2028-02-29");
+  });
+});
+
+describe("startOfLogicalDayMs", () => {
+  it("is the boundary hour on that date", () => {
+    expect(startOfLogicalDayMs("2026-08-08")).toBe(at(2026, 8, 8, 4).getTime());
+  });
+
+  it("round trips with dayKeyFor at the boundary", () => {
+    // The first instant of a logical day must map back to that same day.
+    const start = startOfLogicalDayMs("2026-08-08");
+    expect(dayKeyFor(new Date(start))).toBe("2026-08-08");
+  });
+
+  it("bounds the day so a late night drink falls inside it", () => {
+    // 1am on the 9th belongs to the 8th, so it must be at or after the 8th's start.
+    const start = startOfLogicalDayMs("2026-08-08");
+    expect(at(2026, 8, 9, 1).getTime()).toBeGreaterThanOrEqual(start);
+  });
+
+  it("excludes the instant before the day begins", () => {
+    const start = startOfLogicalDayMs("2026-08-08");
+    expect(dayKeyFor(new Date(start - 1))).toBe("2026-08-07");
+  });
+
+  it("honours a custom boundary hour", () => {
+    expect(startOfLogicalDayMs("2026-08-08", 0)).toBe(at(2026, 8, 8, 0).getTime());
+  });
+
+  it("rejects an out of range boundary hour", () => {
+    expect(() => startOfLogicalDayMs("2026-08-08", 24)).toThrow(RangeError);
   });
 });

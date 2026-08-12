@@ -69,6 +69,11 @@ describe("dayTotals", () => {
       { dayKey: "2026-08-09", totalMl: 250 },
     ]);
   });
+
+  it("rejects a bad day start hour even with no entries", () => {
+    expect(() => dayTotals([], 24)).toThrow(RangeError);
+    expect(() => totalForDay([], "2026-08-08", -1)).toThrow(RangeError);
+  });
 });
 
 describe("totalForDay", () => {
@@ -118,6 +123,12 @@ describe("metDayKeys", () => {
   it("rejects a non positive goal", () => {
     expect(() => metDayKeys([], 0)).toThrow(RangeError);
     expect(() => metDayKeys([], -1)).toThrow(RangeError);
+  });
+
+  it("rejects a bad day start hour even with no entries", () => {
+    // Validation used to sit inside the per entry loop, so an empty list
+    // silently accepted an invalid hour and only threw once data existed.
+    expect(() => metDayKeys([], 2000, 24)).toThrow(RangeError);
   });
 });
 
