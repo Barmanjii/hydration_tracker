@@ -21,10 +21,22 @@ import {
 
 import { DRINK_PRESETS } from "../domain/goal";
 import { useIntake } from "./useIntake";
+import { type RemindersState, useReminders } from "./useReminders";
 
 export function HomeScreen() {
-  const { loading, error, todayMl, goalMl, progress, streak, canUndo, log, undo } =
-    useIntake();
+  const {
+    loading,
+    error,
+    todayMl,
+    goalMl,
+    progress,
+    streak,
+    canUndo,
+    entries,
+    log,
+    undo,
+  } = useIntake();
+  const reminders = useReminders(entries, goalMl);
 
   if (loading) {
     return (
@@ -88,6 +100,8 @@ export function HomeScreen() {
           ))}
         </View>
 
+        <ReminderRow reminders={reminders} />
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Undo the last drink logged today"
@@ -107,6 +121,45 @@ export function HomeScreen() {
 
       <StatusBar style="dark" />
     </SafeAreaView>
+  );
+}
+
+/**
+ * Reminder status, and the prompt to turn them on.
+ *
+ * The wording distinguishes a seed schedule from a learned one rather than
+ * claiming personalisation it has not earned yet.
+ */
+function ReminderRow({ reminders }: { reminders: RemindersState }) {
+  if (reminders.permission === "granted") {
+    return (
+      <Text style={styles.reminderNote}>
+        {reminders.scheduled === 0
+          ? "Reminders on. Nothing left to send today."
+          : reminders.basis === "learned"
+            ? `${reminders.scheduled} reminders set, timed to your quiet stretches`
+            : `${reminders.scheduled} reminders set on a starting schedule`}
+      </Text>
+    );
+  }
+
+  if (reminders.permission === "denied") {
+    return (
+      <Text style={styles.reminderNote}>
+        Reminders are blocked. Enable notifications in system settings to use them.
+      </Text>
+    );
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Turn on hydration reminders"
+      style={({ pressed }) => [styles.enable, pressed && styles.enablePressed]}
+      onPress={() => void reminders.enable()}
+    >
+      <Text style={styles.enableLabel}>Turn on reminders</Text>
+    </Pressable>
   );
 }
 
@@ -210,6 +263,27 @@ const styles = StyleSheet.create({
   presetAmount: {
     color: colours.muted,
     fontSize: 13,
+  },
+  reminderNote: {
+    color: colours.muted,
+    fontSize: 13,
+    textAlign: "center",
+  },
+  enable: {
+    alignSelf: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colours.accent,
+  },
+  enablePressed: {
+    backgroundColor: colours.accentSoft,
+  },
+  enableLabel: {
+    color: colours.accent,
+    fontSize: 14,
+    fontWeight: "600",
   },
   undo: {
     alignSelf: "center",
