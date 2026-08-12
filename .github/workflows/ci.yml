@@ -57,6 +57,40 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # Deliberately fails only on critical, and always prints the full report.
+  #
+  # A gate on "high" would make main permanently red. As of this being written
+  # the tree carries 18 advisories, all of them reached through expo and
+  # react-native, and npm's suggested remedy is to downgrade to expo 53 and
+  # react-native 0.72, which is backwards from the pinned versions and would
+  # break the build. The underlying issues (an infinite loop in image-size's
+  # ICNS parser, a missing bounds check in uuid) live in metro and the Expo CLI,
+  # which run at bundle time on a developer machine and never ship to a device.
+  #
+  # So: critical blocks, everything else is reported and read by a human. If
+  # that balance ever starts hiding something real, tighten it then.
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Report all advisories
+        run: npm audit || true
+
+      - name: Fail on critical
+        run: npm audit --audit-level=critical
+
   android:
     name: android debug build
     runs-on: ubuntu-latest
