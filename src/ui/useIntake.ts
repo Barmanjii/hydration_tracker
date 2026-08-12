@@ -43,6 +43,8 @@ export interface IntakeState {
   streak: number;
   /** Whether undo would currently remove anything. */
   canUndo: boolean;
+  /** Every stored entry, for consumers that derive their own view. */
+  entries: readonly DrinkEntry[];
   /** Log a drink. */
   log: (amountMl: number) => Promise<void>;
   /** Remove the last drink logged today. */
@@ -131,6 +133,7 @@ export function useIntake(goalMl: number = DEFAULT_DAILY_GOAL_ML): IntakeState {
     progress: goalProgress(todayMl, goalMl),
     streak,
     canUndo: todayMl > 0,
+    entries,
     log,
     undo,
   };

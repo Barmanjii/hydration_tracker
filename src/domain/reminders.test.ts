@@ -2,9 +2,11 @@ import type { DrinkEntry } from "./intake";
 import {
   DEFAULT_REMINDER_COUNT,
   MIN_REMINDER_GAP_HOURS,
+  REMINDER_HORIZON_DAYS,
   daysOfHistory,
   loggingHourHistogram,
   planReminders,
+  reminderOccurrences,
 } from "./reminders";
 
 const entry = (
@@ -157,5 +159,80 @@ describe("planReminders", () => {
 
   it("rejects a non positive reminder count", () => {
     expect(() => planReminders([], { reminderCount: 0 })).toThrow(RangeError);
+  });
+});
+
+describe("reminderOccurrences", () => {
+  // Midday on the 8th, so some planned hours are behind and some ahead.
+  const now = new Date(2026, 7, 8, 12, 30);
+
+  it("is empty with no planned hours", () => {
+    expect(reminderOccurrences([], now)).toEqual([]);
+  });
+
+  it("skips hours that have already passed today", () => {
+    const occurrences = reminderOccurrences([9, 15], now, 0);
+    expect(occurrences).toHaveLength(1);
+    expect(occurrences[0].getHours()).toBe(15);
+  });
+
+  it("skips the current hour once it has begun", () => {
+    // 12:30 is past 12:00, so a 12:00 reminder would fire immediately.
+    expect(reminderOccurrences([12], now, 0)).toEqual([]);
+  });
+
+  it("skips today entirely when the goal is already met", () => {
+    // Nagging someone who has finished is how an app gets muted.
+    expect(reminderOccurrences([15, 20], now, 0, true)).toEqual([]);
+  });
+
+  it("still schedules later days when today's goal is met", () => {
+    const occurrences = reminderOccurrences([15], now, 1, true);
+    expect(occurrences).toHaveLength(1);
+    expect(occurrences[0].getDate()).toBe(9);
+  });
+
+  it("schedules every planned hour on later days, including passed ones", () => {
+    // 9am is behind us today but not on tomorrow.
+    const occurrences = reminderOccurrences([9, 15], now, 1);
+    expect(occurrences.map((d) => [d.getDate(), d.getHours()])).toEqual([
+      [8, 15],
+      [9, 9],
+      [9, 15],
+    ]);
+  });
+
+  it("returns moments in ascending order", () => {
+    const occurrences = reminderOccurrences([20, 15, 18], now, 2);
+    const times = occurrences.map((d) => d.getTime());
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+  });
+
+  it("lands on the hour exactly", () => {
+    for (const at of reminderOccurrences([15], now, 1)) {
+      expect(at.getMinutes()).toBe(0);
+      expect(at.getSeconds()).toBe(0);
+      expect(at.getMilliseconds()).toBe(0);
+    }
+  });
+
+  it("crosses a month boundary", () => {
+    const endOfMonth = new Date(2026, 7, 31, 12, 0);
+    const occurrences = reminderOccurrences([15], endOfMonth, 1);
+    expect(occurrences.map((d) => [d.getMonth() + 1, d.getDate()])).toEqual([
+      [8, 31],
+      [9, 1],
+    ]);
+  });
+
+  it("covers the horizon by default", () => {
+    const occurrences = reminderOccurrences([15], now);
+    // Today plus the horizon, since 15:00 today is still ahead of 12:30.
+    expect(occurrences).toHaveLength(REMINDER_HORIZON_DAYS + 1);
+  });
+
+  it("rejects a negative or fractional horizon", () => {
+    expect(() => reminderOccurrences([15], now, -1)).toThrow(RangeError);
+    expect(() => reminderOccurrences([15], now, 1.5)).toThrow(RangeError);
   });
 });

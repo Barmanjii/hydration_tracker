@@ -212,3 +212,70 @@ export function planReminders(
     daysOfHistory: days,
   };
 }
+
+/**
+ * How many days ahead to schedule concrete reminders for.
+ *
+ * Reminders are scheduled as dated one offs rather than a daily repeat, so that
+ * a day whose goal is already met can be skipped. The cost of that choice is
+ * that the schedule has a horizon: if the app is not opened for longer than this,
+ * reminders run out. Seven days is the trade, and every open tops it back up.
+ */
+export const REMINDER_HORIZON_DAYS = 7;
+
+/**
+ * Concrete moments to fire reminders at, from now to the horizon.
+ *
+ * Today is treated differently from later days in two ways, both deliberate:
+ * hours that have already passed are skipped, because a reminder for 9am
+ * scheduled at 2pm would fire immediately, and the whole day is skipped when the
+ * goal is already met, because nagging someone who has finished is how an app
+ * gets muted.
+ *
+ * Later days cannot be filtered that way, since whether their goal will be met
+ * is unknowable now. They are topped up and re-evaluated on the next app open.
+ *
+ * @param plannedHours Hours chosen by `planReminders`.
+ * @param now Current moment.
+ * @param daysAhead How many further days to schedule. Zero means today only.
+ * @param todayGoalMet Whether today's goal has already been reached.
+ * @returns Ascending moments, each on the hour.
+ *
+ * @throws RangeError If `daysAhead` is negative or not an integer.
+ */
+export function reminderOccurrences(
+  plannedHours: readonly number[],
+  now: Date,
+  daysAhead: number = REMINDER_HORIZON_DAYS,
+  todayGoalMet = false
+): Date[] {
+  if (!Number.isInteger(daysAhead) || daysAhead < 0) {
+    throw new RangeError(`daysAhead must be a non negative integer, got ${daysAhead}`);
+  }
+
+  const occurrences: Date[] = [];
+
+  for (let offset = 0; offset <= daysAhead; offset += 1) {
+    if (offset === 0 && todayGoalMet) continue;
+
+    for (const hour of plannedHours) {
+      // Constructed from local date parts, so a daylight saving shift lands on
+      // the wall clock hour the user expects rather than an hour either side.
+      const at = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + offset,
+        hour,
+        0,
+        0,
+        0
+      );
+
+      // Strictly after now: an hour that has just passed would otherwise fire
+      // the instant it is scheduled.
+      if (at.getTime() > now.getTime()) occurrences.push(at);
+    }
+  }
+
+  return occurrences.sort((a, b) => a.getTime() - b.getTime());
+}
