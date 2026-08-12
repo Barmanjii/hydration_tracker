@@ -1,30 +1,29 @@
 # AGENTS.md
 
-Read this before writing any code in this repository. It exists so that a new
-agent or person can start work without rediscovering decisions that are already
-made, and without asking questions this file already answers.
+Read this before writing code here. It records decisions already made and traps
+already hit, so neither has to be rediscovered.
 
-`CLAUDE.md` imports this file. Keep the content here, not there, so there is one
-source rather than two that drift.
+`CLAUDE.md` is a one line import of this file. Keep content here, so the two
+cannot drift.
 
 ---
 
 ## Expo has changed
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before
-writing any code. Older Expo answers are common in training data and confidently
-wrong for this version.
+Read the versioned docs at https://docs.expo.dev/versions/v57.0.0/ before writing
+code. Older Expo answers are common in training data and confidently wrong for
+this version.
 
-Current versions: Expo 57, React 19.2, React Native 0.86, TypeScript 6.
+Expo 57, React 19.2, React Native 0.86, TypeScript 6.
 
 ---
 
 ## What this is
 
-An Android hydration tracker. Logging must be effortless and reminders must adapt
-to when the user actually lapses.
+An Android hydration tracker. Logging must be effortless, and reminders must
+adapt to when the user actually lapses.
 
-The full plan, including scope, open questions, and acceptance criteria, is in
+The plan, with scope and acceptance criteria, is in
 [agents_plans](https://github.com/Barmanjii/agents_plans). Read
 `002_hydration_tracker.md` before proposing a feature. If a change makes the plan
 wrong, update the plan in the same pull request.
@@ -33,15 +32,32 @@ wrong, update the plan in the same pull request.
 
 ## Decisions already made
 
-Do not relitigate these without a reason that is new.
+Do not relitigate these without a new reason.
 
 | Decision | Why |
 |---|---|
-| Android first | Reminder reliability is the entire product, and web push is too inconsistent to build on. |
-| No iOS | It cannot be built without macOS. Do not add iOS specific code or suggest EAS iOS builds. |
-| Local first, fully offline | The app must work with no network, including reminders. Sync is a convenience and never a requirement. |
-| No camera verification of drinking | Adding friction to the core loop is the one change guaranteed to kill the habit. Intelligence goes in the reminder, not in a gate on the counter. |
-| Statistics before models | Adaptive reminders start as plain averages over logging times. Only reach for a model once simple statistics have demonstrably failed. |
+| Android first | Reminder reliability is the whole product, and web push is too inconsistent to build on. |
+| No iOS | Cannot be built without macOS. Do not add iOS specific code or suggest EAS iOS builds. |
+| Local first, fully offline | Must work with no network, including reminders. Sync is a convenience, never a requirement. |
+| No camera verification of drinking | Friction in the core loop is the one change guaranteed to kill the habit. Intelligence goes in the reminder, not in a gate on the counter. |
+| Statistics before models | Reminder timing is plain counting. Reach for a model only once simple statistics have demonstrably failed. |
+| A logical day starts at 4am | A drink logged at 1am belongs to the night before. Midnight rollover would break a streak for someone merely awake late. |
+
+---
+
+## Architecture
+
+One rule, and it is load bearing:
+
+**`src/domain` is pure. `src/data` is thin.**
+
+All arithmetic lives in `src/domain`, so it is testable with no device, emulator,
+or real SQLite. `src/data/db.ts` stores and retrieves rows and does no counting.
+If a function there starts doing arithmetic, move the arithmetic to the domain
+layer rather than testing the database.
+
+`src/ui` holds one hook and one screen. The hook wires the two layers together
+and holds no arithmetic either.
 
 ---
 
@@ -55,47 +71,83 @@ npm run lint         # eslint
 npm test             # jest
 ```
 
-CI runs exactly these commands. If it passes locally and fails in CI, the
-difference is the environment, not the checks.
+CI runs those four checks, plus two that have no npm script:
+
+```bash
+npm audit --audit-level=critical           # fails on critical only, by design
+npx expo export --platform android         # proves the app bundles
+```
+
+---
+
+## CI traps
+
+Each of these has already cost time once.
+
+- **`assembleDebug` does not bundle JavaScript.** Debug APKs load from Metro at
+  runtime, so a missing or misspelled module passes a green `android debug build`
+  and crashes on launch. The `bundle` job is the only check that proves the app
+  starts. Type check does not catch it either: a path that resolves for `tsc` can
+  still fail Metro's resolver.
+- **`npm audit` misresolves the Expo tree.** It reports advisories whose
+  suggested fix is downgrading Expo and React Native below the pinned versions.
+  The audit job therefore fails on `critical` only. Do not tighten it to `high`
+  without reading the comment in `ci.yml` first.
+- **Do not add `cache: gradle` to `setup-java`.** It resolves its cache key from
+  gradle files at checkout, and `android/` does not exist until `expo prebuild`
+  generates it. There is an explicit `actions/cache` step after prebuild instead.
+- **Piping a check through `tail` hides its exit code.** `npm run typecheck |
+  tail -3` reports success whatever `tsc` did. Redirect to a file and check `$?`.
 
 ---
 
 ## How work moves
 
 **Never commit directly to `main`.** It is protected with `enforce_admins` on, so
-the push is rejected for everyone including the repository owner. Every change
-goes through a branch and a pull request, including small ones.
+the push is rejected for everyone including the repository owner.
 
-Enable the local guard once per clone, so this fails immediately rather than after
-the objects have uploaded:
+Enable the local guard once per clone, so this fails immediately rather than
+after the objects upload:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-1. Branch as `prefix/short_description`, using conventional prefixes, underscores
-   in the description, never hyphens. Example: `feat/streak_counter`.
+1. Branch as `prefix/short_description`: conventional prefix, underscores in the
+   description, never hyphens. Example: `feat/streak_counter`.
 2. Commit in small coherent units with conventional prefixes: `feat`, `fix`,
    `docs`, `test`, `refactor`, `style`, `perf`, `ci`, `build`. Never `chore`.
 3. Open a pull request and fill every section of the template.
-4. A pull request should be reviewable in one sitting. If it runs past a few
-   hundred meaningful lines, split it or stack it.
+4. Keep it reviewable in one sitting. Past a few hundred meaningful lines, split
+   it or stack it.
 
-For genuinely layered changes, such as a schema then the data layer then the
-interface, use a stack:
+### Parallel or stacked
+
+Default to **parallel**: independent branches off `main` with disjoint file sets
+merge in any order with no rebasing.
+
+**Stack only when a branch genuinely needs the one below it**, such as two
+branches editing the same file where the second builds on the first.
 
 ```bash
-gh stack init            # or: gh stack add <branch>
+gh stack add <branch>
 gh stack submit --auto --open
+gh stack merge <stack-number> --yes --rebase
 ```
 
-Do not manufacture a stack for a change that has no layers.
+`gh pr merge` **fails on a stacked pull request**; it requires the async merge
+API. Use `gh stack merge`, which merges the whole stack atomically.
 
-**Merge with rebase, never squash.** The repository is configured to allow rebase
-merge only, so the wrong button is not available. Squash merging creates a commit
-on `main` that is not an ancestor of the branch it came from, which leaves every
-branch stacked above trying to reapply changes `main` already has. That turns a
-clean stack into a conflict on every merge. Merged branches delete themselves.
+### Merging
+
+- **Rebase, never squash.** The repository allows rebase merge only. Squash puts
+  a commit on `main` that is not an ancestor of its branch, so every branch
+  stacked above reapplies changes `main` already has, turning a clean stack into
+  a conflict on every merge.
+- Required checks are **strict**, so a branch must be current with `main`. Each
+  merge makes the others `BEHIND`, needing a rebase and a fresh CI run. Merging
+  several means several rounds. Do not relax the protection to avoid this.
+- Merged branches delete themselves.
 
 ---
 
@@ -104,36 +156,33 @@ clean stack into a conflict on every merge. Merged branches delete themselves.
 These apply to code comments, documentation, commit messages, pull request
 descriptions, and any text the user sees in the app.
 
-- **No em dashes, and no hyphens in the middle of a sentence.** Use a comma, a
-  colon, a full stop, or rewrite the sentence.
-- **Never mention Claude, any AI tool, or "generated by"** in commit messages,
-  pull request descriptions, code comments, or user facing text.
+- **No em dashes, and no hyphens mid sentence.** Use a comma, a colon, a full
+  stop, or rewrite.
+- **Never mention Claude, any AI tool, or "generated by"** anywhere, including
+  commit messages and pull request descriptions.
 - No co author trailers on commits.
-- Comments explain why or what stage, never what the code plainly does. Keep them
-  short and put them only where a reader would otherwise stall.
+- Comments explain why, or what stage, never what the code plainly does. Put them
+  only where a reader would otherwise stall.
 
 ---
 
 ## Testing
 
-Tests exist to protect logic that is easy to get wrong and hard to notice when it
-is wrong. In this app that means dates and counting, not rendering.
+Test logic that is easy to get wrong and hard to notice when it is wrong. Here
+that means dates and counting, not rendering.
 
-Worth testing:
+Worth testing: day boundary handling, daily totals, streak calculation across
+missed days and month or year boundaries, reminder selection given a logging
+history.
 
-- Streak calculation, especially across day boundaries, missed days, and
-  timezone changes
-- Daily total rollover, meaning when a day starts and ends
-- Reminder scheduling logic, given a history of logging times
+Not worth testing: that a component renders, library behaviour, or anything whose
+failure is obvious on opening the app.
 
-Not worth testing:
+Coverage percentage is not a goal.
 
-- That a component renders
-- Library behaviour
-- Anything whose failure would be immediately obvious on opening the app
-
-Coverage percentage is not a goal. A test that fails only when the app is broken
-is worth more than ten that fail whenever the markup changes.
+Do not suppress a lint rule to make a test or a hook pass. When
+`react-hooks/set-state-in-effect` fired, the fix was restructuring to a reload
+token and a cancellation flag, which was the better pattern anyway.
 
 ---
 
@@ -143,15 +192,6 @@ It is public.
 
 - Nothing about any employer, past or present. Not architecture, not tooling, not
   process, not even unnamed.
-- No personal information about any real person, including the person this is
-  built for.
+- No personal information about any real person.
 - No credentials, tokens, keys, or signing material.
 - No real user data in fixtures. Generate it.
-
----
-
-## When you are unsure
-
-Say so, and ask. A wrong assumption written confidently into a plan costs more
-than a question. If two readings of a request are both plausible, present both
-rather than silently picking one.
