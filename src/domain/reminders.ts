@@ -214,31 +214,34 @@ export function planReminders(
 }
 
 /**
- * How many days ahead to schedule concrete reminders for.
+ * How many further days beyond today to schedule concrete reminders for.
  *
- * Reminders are scheduled as dated one offs rather than a daily repeat, so that
- * a day whose goal is already met can be skipped. The cost of that choice is
- * that the schedule has a horizon: if the app is not opened for longer than this,
- * reminders run out. Seven days is the trade, and every open tops it back up.
+ * Reminders are dated one offs rather than a daily repeat, so that a day whose
+ * goal is already met can be skipped. The cost is a horizon: if the app is not
+ * opened for longer than this, reminders run out. Every open tops it back up,
+ * and the user opens the app to log.
  */
 export const REMINDER_HORIZON_DAYS = 7;
 
 /**
  * Concrete moments to fire reminders at, from now to the horizon.
  *
- * Today is treated differently from later days in two ways, both deliberate:
- * hours that have already passed are skipped, because a reminder for 9am
- * scheduled at 2pm would fire immediately, and the whole day is skipped when the
- * goal is already met, because nagging someone who has finished is how an app
- * gets muted.
+ * Two rules, both deliberate. Hours that have already passed are skipped,
+ * because a reminder for 9am scheduled at 2pm would fire immediately. And any
+ * logical day whose goal is already met is skipped entirely, because nagging
+ * someone who has finished is how an app gets muted.
  *
- * Later days cannot be filtered that way, since whether their goal will be met
- * is unknowable now. They are topped up and re-evaluated on the next app open.
+ * `metDays` is matched against the **logical** day each moment falls in, not the
+ * calendar day. That distinction is load bearing: between midnight and the 4am
+ * boundary those differ, so filtering on the calendar day would suppress the
+ * whole of the coming day's reminders on the strength of the previous day's
+ * goal.
  *
  * @param plannedHours Hours chosen by `planReminders`.
  * @param now Current moment.
- * @param daysAhead How many further days to schedule. Zero means today only.
- * @param todayGoalMet Whether today's goal has already been reached.
+ * @param metDays Logical day keys whose goal is already met, from `metDayKeys`.
+ * @param daysAhead Further days to schedule beyond today. Zero means today only.
+ * @param dayStartHour Hour the logical day begins.
  * @returns Ascending moments, each on the hour.
  *
  * @throws RangeError If `daysAhead` is negative or not an integer.
@@ -246,21 +249,21 @@ export const REMINDER_HORIZON_DAYS = 7;
 export function reminderOccurrences(
   plannedHours: readonly number[],
   now: Date,
+  metDays: ReadonlySet<string> = new Set<string>(),
   daysAhead: number = REMINDER_HORIZON_DAYS,
-  todayGoalMet = false
+  dayStartHour: number = DEFAULT_DAY_START_HOUR
 ): Date[] {
   if (!Number.isInteger(daysAhead) || daysAhead < 0) {
     throw new RangeError(`daysAhead must be a non negative integer, got ${daysAhead}`);
   }
+  assertDayStartHour(dayStartHour);
 
   const occurrences: Date[] = [];
 
   for (let offset = 0; offset <= daysAhead; offset += 1) {
-    if (offset === 0 && todayGoalMet) continue;
-
     for (const hour of plannedHours) {
-      // Constructed from local date parts, so a daylight saving shift lands on
-      // the wall clock hour the user expects rather than an hour either side.
+      // Built from local date parts, so a daylight saving shift lands on the
+      // wall clock hour the user expects rather than an hour either side.
       const at = new Date(
         now.getFullYear(),
         now.getMonth(),
@@ -273,7 +276,11 @@ export function reminderOccurrences(
 
       // Strictly after now: an hour that has just passed would otherwise fire
       // the instant it is scheduled.
-      if (at.getTime() > now.getTime()) occurrences.push(at);
+      if (at.getTime() <= now.getTime()) continue;
+
+      if (metDays.has(dayKeyFor(at, dayStartHour))) continue;
+
+      occurrences.push(at);
     }
   }
 

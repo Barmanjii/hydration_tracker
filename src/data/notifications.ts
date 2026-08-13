@@ -67,11 +67,18 @@ async function ensureAndroidChannel(): Promise<void> {
  * @returns Whether reminders may be shown.
  */
 export async function reminderPermission(): Promise<PermissionState> {
-  const { status } = await Notifications.getPermissionsAsync();
+  const { status, canAskAgain } = await Notifications.getPermissionsAsync();
 
   if (status === "granted") return "granted";
-  if (status === "denied") return "denied";
-  return "undetermined";
+
+  // Android 13 and later report a POST_NOTIFICATIONS that has never been
+  // requested as "denied", because the module derives status from
+  // NotificationManagerCompat.areNotificationsEnabled(), which is false until
+  // the permission is granted. Trusting status alone would mean showing
+  // "blocked" on every fresh install and never offering the prompt, which makes
+  // reminders unreachable. canAskAgain is the only signal that separates never
+  // asked from actually blocked.
+  return canAskAgain ? "undetermined" : "denied";
 }
 
 /**
@@ -120,39 +127,71 @@ export async function cancelReminders(): Promise<void> {
 }
 
 /**
+ * Serialises syncs, and lets a newer one abandon an older one.
+ *
+ * Both halves are needed. A sync is one cancel plus up to thirty schedule calls,
+ * so two overlapping runs interleave: the second cancels only what the first has
+ * landed so far, and the first then schedules the rest, leaving orphans that
+ * nothing will ever cancel. The queue stops the interleaving; the generation
+ * counter stops a superseded run from finishing work that is already stale.
+ */
+let syncQueue: Promise<unknown> = Promise.resolve();
+let syncGeneration = 0;
+
+/**
  * Replace all scheduled reminders with the given moments.
  *
- * Cancel then schedule, rather than diffing. The list is small, the operation
- * runs on app open rather than in a hot path, and a replace cannot drift out of
- * step with what is actually pending the way a diff can.
+ * Cancel then schedule, rather than diffing. The list is small, this runs on app
+ * open rather than in a hot path, and a replace cannot drift out of step with
+ * what is actually pending the way a diff can.
  *
- * Moments already in the past are ignored, so a stale list cannot cause a burst
- * of notifications on open.
+ * Concurrent calls are serialised, and a superseded call stops early.
  *
  * @param moments When to fire, from `reminderOccurrences`.
- * @returns How many were scheduled.
+ * @returns How many were scheduled. Zero if superseded.
  */
-export async function syncReminders(moments: readonly Date[]): Promise<number> {
-  await ensureAndroidChannel();
-  await cancelReminders();
+export function syncReminders(moments: readonly Date[]): Promise<number> {
+  const generation = ++syncGeneration;
 
-  const now = Date.now();
-  const future = moments.filter((at) => at.getTime() > now);
+  const run = syncQueue.then(async () => {
+    // Superseded while queued. Nothing to do; the newer run covers it.
+    if (generation !== syncGeneration) return 0;
 
-  for (const at of future) {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: REMINDER_TITLE,
-        body: REMINDER_BODY,
-        data: { kind: REMINDER_MARKER },
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: at,
-        channelId: ANDROID_CHANNEL_ID,
-      },
-    });
-  }
+    await ensureAndroidChannel();
+    await cancelReminders();
 
-  return future.length;
+    // Re-read the clock here rather than trusting the caller's list, so a stale
+    // queued sync cannot fire a burst of past-dated notifications.
+    const now = Date.now();
+    const future = moments.filter((at) => at.getTime() > now);
+
+    let scheduled = 0;
+    for (const at of future) {
+      // Checked inside the loop as well: a newer sync arriving mid-loop should
+      // stop this one rather than race it to the finish.
+      if (generation !== syncGeneration) break;
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: REMINDER_TITLE,
+          body: REMINDER_BODY,
+          data: { kind: REMINDER_MARKER },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: at,
+          channelId: ANDROID_CHANNEL_ID,
+        },
+      });
+      scheduled += 1;
+    }
+
+    return scheduled;
+  });
+
+  // The queue must not be poisoned by a rejection, or every later sync inherits
+  // it. The caller still sees the error through `run`.
+  syncQueue = run.catch(() => undefined);
+
+  return run;
 }
