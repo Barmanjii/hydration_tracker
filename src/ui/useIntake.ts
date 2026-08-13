@@ -43,8 +43,15 @@ export interface IntakeState {
   streak: number;
   /** Whether undo would currently remove anything. */
   canUndo: boolean;
-  /** Every stored entry, for consumers that derive their own view. */
-  entries: readonly DrinkEntry[];
+  /**
+   * Every stored entry, or null until the first load lands.
+   *
+   * Null rather than an empty array on purpose: consumers that act on history,
+   * such as reminder scheduling, must be able to tell "no drinks yet" from "not
+   * loaded yet", because acting on the second as if it were the first schedules
+   * a default plan over a learned one.
+   */
+  entries: readonly DrinkEntry[] | null;
   /** Log a drink. */
   log: (amountMl: number) => Promise<void>;
   /** Remove the last drink logged today. */
@@ -55,7 +62,7 @@ const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
 export function useIntake(goalMl: number = DEFAULT_DAILY_GOAL_ML): IntakeState {
-  const [entries, setEntries] = useState<DrinkEntry[]>([]);
+  const [entries, setEntries] = useState<DrinkEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -119,9 +126,10 @@ export function useIntake(goalMl: number = DEFAULT_DAILY_GOAL_ML): IntakeState {
   // per day, so this is cheaper than the bookkeeping to avoid it, and it cannot
   // go stale.
   const todayKey = dayKeyFor(new Date(), DEFAULT_DAY_START_HOUR);
-  const todayMl = totalForDay(entries, todayKey, DEFAULT_DAY_START_HOUR);
+  const loaded = entries ?? [];
+  const todayMl = totalForDay(loaded, todayKey, DEFAULT_DAY_START_HOUR);
   const streak = currentStreak(
-    metDayKeys(entries, goalMl, DEFAULT_DAY_START_HOUR),
+    metDayKeys(loaded, goalMl, DEFAULT_DAY_START_HOUR),
     todayKey
   );
 

@@ -132,13 +132,25 @@ export function HomeScreen() {
  */
 function ReminderRow({ reminders }: { reminders: RemindersState }) {
   if (reminders.permission === "granted") {
+    // Null means scheduling has not run or failed. Reporting that as "nothing
+    // due" would dress a failure up as success.
+    if (reminders.scheduled === null) {
+      return <Text style={styles.reminderNote}>Setting up reminders…</Text>;
+    }
+
+    if (reminders.scheduled === 0) {
+      return (
+        <Text style={styles.reminderNote}>
+          Reminders on. Nothing more due today.
+        </Text>
+      );
+    }
+
     return (
       <Text style={styles.reminderNote}>
-        {reminders.scheduled === 0
-          ? "Reminders on. Nothing left to send today."
-          : reminders.basis === "learned"
-            ? `${reminders.scheduled} reminders set, timed to your quiet stretches`
-            : `${reminders.scheduled} reminders set on a starting schedule`}
+        {reminders.basis === "learned"
+          ? "Reminders on, timed to your quiet stretches"
+          : "Reminders on, using a starting schedule"}
       </Text>
     );
   }
